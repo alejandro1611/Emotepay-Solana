@@ -1,132 +1,89 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sparkles, Send, Tv, Zap } from "lucide-react";
-import { usePrivy, useSendTransaction, useWallets } from "@privy-io/react-auth";
+import { usePrivy } from "@privy-io/react-auth";
+import { useWallets as useSolanaWallets } from "@privy-io/react-auth/solana";
 import { AuthButton } from "@/components/AuthButton";
-import { emotePayContract } from "@/lib/contracts";
-import { demoCreator } from "@/lib/creator";
+import { demoSolanaCreator } from "@/lib/solana/config";
 import { EMOTES, type Emote } from "@/lib/emotes";
-import {
-  getPaymentReadinessState,
-  type PaymentState,
-} from "@/lib/payment";
-import { monadTestnet } from "@/lib/chains";
-import {
-  createPublicClient,
-  encodeFunctionData,
-  http,
-  isAddressEqual,
-  parseEther,
-  type Address,
-} from "viem";
+import type { PaymentState } from "@/lib/payment";
 
-const monadPublicClient = createPublicClient({
-  chain: monadTestnet,
-  transport: http(monadTestnet.rpcUrls.default.http[0]),
-});
-
-type BalanceCheckState =
+type SolanaWalletReadinessState =
   | { status: "idle" }
-  | { status: "checking" }
   | { status: "ready" }
-  | { status: "insufficient"; reason: string }
   | { status: "error"; reason: string };
 
-function getEmbeddedWallet(
-  wallets: ReturnType<typeof useWallets>["wallets"],
-) {
-  return wallets.find(
-    (wallet) =>
-      wallet.type === "ethereum" &&
-      (wallet.walletClientType === "privy" ||
-        wallet.walletClientType === "privy-v2"),
-  );
-}
-
-function getTransactionErrorMessage(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  const lowerMessage = message.toLowerCase();
-
-  if (lowerMessage.includes("user rejected")) {
-    return "Transaction rejected by user.";
-  }
-
-  if (
-    lowerMessage.includes("insufficient") ||
-    lowerMessage.includes("exceeds balance")
-  ) {
-    return "Insufficient MON balance.";
-  }
-
-  if (lowerMessage.includes("revert")) {
-    return "Donation transaction reverted.";
-  }
-
-  if (lowerMessage.includes("fetch") || lowerMessage.includes("network")) {
-    return "RPC request failed. Please try again.";
-  }
-
-  return "Donation transaction failed.";
-}
-
-async function getRequiredDonationBalance({
-  contractAddress,
-  creatorAddress,
-  donorAddress,
-  onchainId,
-  value,
+function getSolanaWalletReadinessState({
+  authReady,
+  authenticated,
+  walletsReady,
+  hasSolanaWallet,
+  hasSolanaPublicKey,
 }: {
-  contractAddress: Address;
-  creatorAddress: Address;
-  donorAddress: Address;
-  onchainId: number;
-  value: bigint;
-}) {
-  const gas = await monadPublicClient.estimateContractGas({
-    address: contractAddress,
-    abi: emotePayContract.abi,
-    functionName: "donate",
-    args: [creatorAddress, BigInt(onchainId)],
-    account: donorAddress,
-    value,
-  });
-  const gasPrice = await monadPublicClient.getGasPrice();
+  authReady: boolean;
+  authenticated: boolean;
+  walletsReady: boolean;
+  hasSolanaWallet: boolean;
+  hasSolanaPublicKey: boolean;
+}): SolanaWalletReadinessState {
+  if (!authReady || !authenticated || !walletsReady) {
+    return { status: "idle" };
+  }
 
-  return value + gas * gasPrice;
+  if (!hasSolanaWallet) {
+    return {
+      status: "error",
+      reason: "Solana embedded wallet is still being created.",
+    };
+  }
+
+  if (!hasSolanaPublicKey) {
+    return {
+      status: "error",
+      reason: "Solana public key is unavailable.",
+    };
+  }
+
+  return { status: "ready" };
+}
+
+function getCreatorConfigurationWarning() {
+  if (demoSolanaCreator.configurationStatus === "missing") {
+    return "Creator Solana public key is not configured.";
+  }
+
+  if (demoSolanaCreator.configurationStatus === "invalid") {
+    return "Creator Solana public key is invalid.";
+  }
+
+  return null;
 }
 
 export default function Home() {
   const { ready, authenticated } = usePrivy();
-  const { ready: walletsReady, wallets } = useWallets();
-  const { sendTransaction } = useSendTransaction();
+  const { ready: walletsReady, wallets } = useSolanaWallets();
   const [selectedEmote, setSelectedEmote] = useState<Emote>(EMOTES[0]);
   const [message, setMessage] = useState("");
-  const [alerts, setAlerts] = useState<Array<{ id: number; emote: Emote; message: string }>>([]);
+  const [alerts] = useState<Array<{ id: number; emote: Emote; message: string }>>([]);
   const [transactionState, setTransactionState] = useState<PaymentState>({
     status: "idle",
   });
-  const [balanceCheck, setBalanceCheck] = useState<BalanceCheckState>({
-    status: "idle",
-  });
-  const embeddedWallet = useMemo(() => getEmbeddedWallet(wallets), [wallets]);
-  const embeddedWalletAddress = embeddedWallet?.address as Address | undefined;
+  const solanaWallet = useMemo(() => wallets[0], [wallets]);
+  const solanaPublicKey = solanaWallet?.address;
   const isSelfDonation =
-    Boolean(embeddedWalletAddress && demoCreator.walletAddress) &&
-    isAddressEqual(
-      embeddedWalletAddress!,
-      demoCreator.walletAddress as Address,
-    );
-  const readinessState = getPaymentReadinessState({
+    Boolean(solanaPublicKey && demoSolanaCreator.publicKey) &&
+    solanaPublicKey === demoSolanaCreator.publicKey;
+  const readinessState = getSolanaWalletReadinessState({
     authReady: ready,
     authenticated,
     walletsReady,
-    hasEmbeddedWallet: Boolean(embeddedWallet),
-    creatorStatus: demoCreator.configurationStatus,
-    contractStatus: emotePayContract.configurationStatus,
-    isSelfDonation,
+    hasSolanaWallet: Boolean(solanaWallet),
+    hasSolanaPublicKey: Boolean(solanaPublicKey),
   });
+  const solanaWalletReady =
+    readinessState.status === "ready" && !isSelfDonation;
   const paymentState =
     transactionState.status === "pending" ||
     transactionState.status === "success"
@@ -136,200 +93,29 @@ export default function Home() {
         : transactionState.status === "error"
         ? transactionState
         : readinessState;
-  const effectiveBalanceCheck: BalanceCheckState =
-    readinessState.status === "ready" ? balanceCheck : { status: "idle" };
-  const balanceCheckMessage =
-    effectiveBalanceCheck.status === "insufficient" ||
-    effectiveBalanceCheck.status === "error"
-      ? effectiveBalanceCheck.reason
-      : null;
-  const canSendReaction =
-    readinessState.status === "ready" &&
-    paymentState.status !== "pending" &&
-    effectiveBalanceCheck.status === "ready";
+  const creatorConfigurationWarning = getCreatorConfigurationWarning();
+  const phaseMessage = solanaWalletReady
+    ? creatorConfigurationWarning ??
+      "Solana wallet ready. SOL tipping starts in Phase 2."
+    : isSelfDonation
+      ? "You can't send a reaction to yourself."
+      : paymentState.status === "error"
+        ? paymentState.reason
+        : null;
+  const canSendReaction = false;
   const sendButtonLabel =
-    paymentState.status === "pending"
-      ? "Confirming reaction..."
-      : effectiveBalanceCheck.status === "checking"
-        ? "Checking wallet balance..."
-        : effectiveBalanceCheck.status === "insufficient"
-          ? "Wallet needs testnet MON"
-          : canSendReaction
-            ? `Send ${selectedEmote.name} (${selectedEmote.displayAmount})`
-            : authenticated
-              ? "Payments not ready"
-              : "Log in to send reaction";
+    walletsReady && solanaWalletReady
+      ? "SOL tipping starts in Phase 2"
+      : authenticated
+        ? "Waiting for Solana wallet"
+        : "Log in to send reaction";
 
-  useEffect(() => {
-    if (
-      readinessState.status !== "ready" ||
-      !embeddedWalletAddress ||
-      !demoCreator.walletAddress ||
-      !emotePayContract.address
-    ) {
-      return;
-    }
-
-    const donorAddress = embeddedWalletAddress;
-    const creatorAddress = demoCreator.walletAddress;
-    const contractAddress = emotePayContract.address;
-    let isCancelled = false;
-
-    async function checkWalletBalance() {
-      setBalanceCheck({ status: "checking" });
-
-      try {
-        const value = parseEther(selectedEmote.amountMon);
-        const requiredBalance = await getRequiredDonationBalance({
-          contractAddress,
-          creatorAddress,
-          donorAddress,
-          onchainId: selectedEmote.onchainId,
-          value,
-        });
-        const balance = await monadPublicClient.getBalance({
-          address: donorAddress,
-        });
-
-        if (isCancelled) {
-          return;
-        }
-
-        setBalanceCheck(
-          balance >= requiredBalance
-            ? { status: "ready" }
-            : {
-                status: "insufficient",
-                reason: "Your wallet needs Monad Testnet MON.",
-              },
-        );
-      } catch {
-        if (!isCancelled) {
-          setBalanceCheck({
-            status: "error",
-            reason: "Unable to check wallet balance right now.",
-          });
-        }
-      }
-    }
-
-    checkWalletBalance();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [
-    embeddedWalletAddress,
-    readinessState.status,
-    selectedEmote.amountMon,
-    selectedEmote.onchainId,
-  ]);
-
-  const triggerDonationAlert = (emote: Emote, alertMessage: string) => {
-    const newAlert = {
-      id: Date.now(),
-      emote,
-      message: alertMessage || "¡Grandioso stream! 🔥",
-    };
-
-    setAlerts((prev) => [newAlert, ...prev]);
-    setMessage("");
-
-    setTimeout(() => {
-      setAlerts((prev) => prev.filter((a) => a.id !== newAlert.id));
-    }, 4000);
-  };
-
-  const handleSendReaction = async (e: React.FormEvent) => {
+  const handleSendReaction = (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!canSendReaction) {
-      setTransactionState(
-        balanceCheckMessage
-          ? { status: "error", reason: balanceCheckMessage }
-          : readinessState,
-      );
-      return;
-    }
-
-    if (!embeddedWallet || !demoCreator.walletAddress || !emotePayContract.address) {
-      setTransactionState({
-        status: "error",
-        reason: "Payment configuration is not ready.",
-      });
-      return;
-    }
-
-    const donationMessage = message;
-    const value = parseEther(selectedEmote.amountMon);
-
-    try {
-      setTransactionState({ status: "pending" });
-
-      await embeddedWallet.switchChain(monadTestnet.id);
-
-      const requiredBalance = await getRequiredDonationBalance({
-        contractAddress: emotePayContract.address,
-        creatorAddress: demoCreator.walletAddress,
-        donorAddress: embeddedWallet.address as Address,
-        onchainId: selectedEmote.onchainId,
-        value,
-      });
-      const balance = await monadPublicClient.getBalance({
-        address: embeddedWallet.address as Address,
-      });
-
-      if (balance < requiredBalance) {
-        setBalanceCheck({
-          status: "insufficient",
-          reason: "Your wallet needs Monad Testnet MON.",
-        });
-        setTransactionState({
-          status: "error",
-          reason: "Your wallet needs Monad Testnet MON.",
-        });
-        return;
-      }
-
-      const data = encodeFunctionData({
-        abi: emotePayContract.abi,
-        functionName: "donate",
-        args: [demoCreator.walletAddress, BigInt(selectedEmote.onchainId)],
-      });
-      const { hash } = await sendTransaction(
-        {
-          to: emotePayContract.address,
-          data,
-          value,
-          chainId: monadTestnet.id,
-        },
-        {
-          address: embeddedWallet.address,
-        },
-      );
-
-      setTransactionState({ status: "pending", hash });
-
-      const receipt = await monadPublicClient.waitForTransactionReceipt({
-        hash,
-      });
-
-      if (receipt.status !== "success") {
-        setTransactionState({
-          status: "error",
-          reason: "Donation transaction reverted.",
-        });
-        return;
-      }
-
-      setTransactionState({ status: "success", reference: hash });
-      triggerDonationAlert(selectedEmote, donationMessage);
-    } catch (error) {
-      setTransactionState({
-        status: "error",
-        reason: getTransactionErrorMessage(error),
-      });
-    }
+    setTransactionState({
+      status: "error",
+      reason: "SOL tipping starts in Phase 2.",
+    });
   };
 
   return (
@@ -352,7 +138,7 @@ export default function Home() {
           <div className="flex items-center gap-3">
             <button className="text-sm font-medium px-4 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-purple-500/50 transition-all flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              Monad Testnet
+              Solana Devnet
             </button>
             <AuthButton />
           </div>
@@ -478,33 +264,12 @@ export default function Home() {
               </button>
               {!authenticated && (
                 <p className="text-xs text-slate-500 text-center">
-                  Sign in with Google or email to create your embedded wallet.
+                  Sign in with Google or email to create your Solana embedded wallet.
                 </p>
               )}
-              {authenticated && paymentState.status === "pending" && (
-                <p className="text-xs text-purple-300 text-center">
-                  Waiting for Monad confirmation
-                  {paymentState.hash ? `: ${paymentState.hash.slice(0, 10)}...` : "."}
-                </p>
+              {authenticated && phaseMessage && (
+                <p className="text-xs text-amber-300 text-center">{phaseMessage}</p>
               )}
-              {authenticated && paymentState.status === "success" && (
-                <p className="text-xs text-emerald-300 text-center">
-                  Donation confirmed
-                  {paymentState.reference ? `: ${paymentState.reference.slice(0, 10)}...` : "."}
-                </p>
-              )}
-              {authenticated && paymentState.status === "error" && (
-                <p className="text-xs text-amber-300 text-center">
-                  {paymentState.reason}
-                </p>
-              )}
-              {authenticated &&
-                paymentState.status !== "error" &&
-                balanceCheckMessage && (
-                  <p className="text-xs text-amber-300 text-center">
-                    {balanceCheckMessage}
-                  </p>
-                )}
             </form>
           </div>
         </div>
