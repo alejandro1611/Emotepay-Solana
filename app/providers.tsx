@@ -3,7 +3,7 @@
 import React from "react";
 import { PrivyProvider } from "@privy-io/react-auth";
 import { usePathname } from "next/navigation";
-import { monadTestnet } from "@/lib/chains";
+import { solanaDevnetRpcs } from "@/lib/solana/config";
 
 const privyAppId = process.env.NEXT_PUBLIC_PRIVY_APP_ID;
 
@@ -28,12 +28,13 @@ export function Providers({ children }: { children: React.ReactNode }) {
         },
         loginMethods: ["google", "email"],
         embeddedWallets: {
-          ethereum: {
+          solana: {
             createOnLogin: "users-without-wallets",
           },
         },
-        defaultChain: monadTestnet,
-        supportedChains: [monadTestnet],
+        solana: {
+          rpcs: solanaDevnetRpcs,
+        },
       }}
     >
       {children}
