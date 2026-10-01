@@ -543,3 +543,121 @@ If blocked by missing credentials, funding, wallet configuration, external servi
 STOP and report the exact requirement.
 
 Do not work around security boundaries or invent credentials.
+
+---
+
+## Spec-Driven Development
+
+EmotePay uses Spec-Driven Development for all meaningful features and migration phases.
+
+The workflow is defined in:
+
+`docs/SDD_WORKFLOW.md`
+
+All new significant work must begin from an approved specification under:
+
+`specs/`
+
+Do not implement a meaningful new feature directly from an informal request if no specification exists.
+
+Small typo fixes, formatting-only changes, and trivial non-behavioral corrections do not require a full specification.
+
+## Agent orchestration
+
+The primary Codex agent acts as the orchestrator.
+
+For an SDD feature, the expected roles are:
+
+1. Architect
+2. Implementer
+3. Reviewer
+4. Human approval
+
+Use the repo-scoped skills:
+
+- `emotepay-architect`
+- `emotepay-implementer`
+- `emotepay-reviewer`
+
+The orchestrator should delegate independent work to subagents when the current Codex environment exposes subagent capabilities.
+
+### Architect
+
+Must be read-only.
+
+Reviews the spec before implementation.
+
+### Implementer
+
+May modify files.
+
+Implements one approved spec only.
+
+Prefer one write-capable implementer for a bounded feature.
+
+### Reviewer
+
+Must be independent from the implementer and read-only during review.
+
+Reviews implementation against the spec.
+
+### Human
+
+The user is the final approval authority.
+
+Agents cannot approve their own implementation.
+
+## Multi-agent rules
+
+Parallel subagents are appropriate for independent read-only work such as:
+
+- documentation research
+- API compatibility research
+- security analysis
+- test-plan analysis
+
+Avoid multiple agents editing the same files concurrently.
+
+For a normal EmotePay spec:
+
+Architect
+→ human spec approval
+→ Implementer
+→ Reviewer
+→ human final approval
+
+Do not skip stages unless the user explicitly requests it.
+
+## Specification status
+
+Allowed statuses:
+
+- DRAFT
+- REVIEW
+- APPROVED
+- IMPLEMENTING
+- VERIFYING
+- COMPLETE
+- BLOCKED
+
+Only the user may authorize transition from:
+
+REVIEW → APPROVED
+
+and:
+
+VERIFYING → COMPLETE
+
+## Spec change rule
+
+An approved spec is immutable during implementation unless a required change is explicitly surfaced and approved.
+
+If an approved requirement must change:
+
+STOP.
+
+Report the proposed spec change.
+
+Wait for human approval.
+
+Do not silently modify requirements to make implementation pass.
