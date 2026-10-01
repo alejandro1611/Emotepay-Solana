@@ -1,0 +1,8 @@
+query CreatorStats($creator: String!) {
+  Creator_by_pk(id: $creator) {
+    id
+    totalDonationsCount
+    totalAmountReceived
+    uniqueDonorsCount
+  }
+}
