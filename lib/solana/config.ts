@@ -31,13 +31,24 @@ export const solanaWsUrl =
 export const solanaDevnetExplorerUrl =
   "https://explorer.solana.com/?cluster=devnet";
 
+export const defaultEmotepayProgramId =
+  "EQEjzX3Kd2JpMzqK9gF32gznDonmLtcuj7fMot4w22nL";
+
+export const emotepayProgramAddress: Address = address(
+  process.env.NEXT_PUBLIC_EMOTEPAY_PROGRAM_ID?.trim() ||
+    defaultEmotepayProgramId,
+);
+
+export const solanaRpc = createSolanaRpc(solanaRpcUrl);
+
 export const solanaDevnetRpcs = {
   [solanaDevnetChain]: {
-    rpc: createSolanaRpc(solanaRpcUrl),
+    rpc: solanaRpc,
     rpcSubscriptions: createSolanaRpcSubscriptions(solanaWsUrl),
     blockExplorerUrl: solanaDevnetExplorerUrl,
   },
 };
+
 
 export function validateSolanaPublicKey(
   configuredPublicKey?: string,

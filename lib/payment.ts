@@ -4,9 +4,19 @@ import type { ContractConfigurationStatus } from "@/lib/contracts";
 export type PaymentState =
   | { status: "idle" }
   | { status: "ready" }
-  | { status: "pending"; hash?: `0x${string}` }
-  | { status: "success"; reference?: string }
+  | { status: "signing" }
+  | { status: "confirming"; signature: string }
+  | { status: "pending"; signature?: string }
+  | { status: "success"; signature: string; explorerUrl?: string; reference?: string }
   | { status: "error"; reason: string };
+
+export function getSolanaExplorerUrl(
+  signature: string,
+  cluster: "devnet" | "mainnet-beta" = "devnet",
+): string {
+  return `https://explorer.solana.com/tx/${signature}?cluster=${cluster}`;
+}
+
 
 type PaymentReadinessInput = {
   authReady: boolean;

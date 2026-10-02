@@ -2,13 +2,22 @@
 
 import React, { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sparkles, Send, Tv, Zap } from "lucide-react";
+import { Sparkles, Send, Tv, Zap, Loader2, ExternalLink, CheckCircle2, AlertCircle } from "lucide-react";
 import { usePrivy } from "@privy-io/react-auth";
-import { useWallets as useSolanaWallets } from "@privy-io/react-auth/solana";
+import {
+  useSignAndSendTransaction,
+  useWallets as useSolanaWallets,
+} from "@privy-io/react-auth/solana";
+import { address } from "@solana/kit";
 import { AuthButton } from "@/components/AuthButton";
-import { demoSolanaCreator } from "@/lib/solana/config";
+import { demoSolanaCreator, solanaDevnetChain } from "@/lib/solana/config";
 import { EMOTES, type Emote } from "@/lib/emotes";
-import type { PaymentState } from "@/lib/payment";
+import { getSolanaExplorerUrl, type PaymentState } from "@/lib/payment";
+import {
+  buildTipSolTransactionBytes,
+  confirmSolanaTransaction,
+  formatSolanaSignature,
+} from "@/lib/solana/transaction";
 
 type SolanaWalletReadinessState =
   | { status: "idle" }
@@ -64,9 +73,10 @@ function getCreatorConfigurationWarning() {
 export default function Home() {
   const { ready, authenticated } = usePrivy();
   const { ready: walletsReady, wallets } = useSolanaWallets();
+  const { signAndSendTransaction } = useSignAndSendTransaction();
   const [selectedEmote, setSelectedEmote] = useState<Emote>(EMOTES[0]);
   const [message, setMessage] = useState("");
-  const [alerts] = useState<Array<{ id: number; emote: Emote; message: string }>>([]);
+  const [alerts, setAlerts] = useState<Array<{ id: number; emote: Emote; message: string }>>([]);
   const [transactionState, setTransactionState] = useState<PaymentState>({
     status: "idle",
   });
@@ -84,39 +94,110 @@ export default function Home() {
   });
   const solanaWalletReady =
     readinessState.status === "ready" && !isSelfDonation;
-  const paymentState =
-    transactionState.status === "pending" ||
-    transactionState.status === "success"
-      ? transactionState
-      : readinessState.status === "ready"
-        ? readinessState
-        : transactionState.status === "error"
-        ? transactionState
-        : readinessState;
   const creatorConfigurationWarning = getCreatorConfigurationWarning();
-  const phaseMessage = solanaWalletReady
-    ? creatorConfigurationWarning ??
-      "Solana wallet ready. SOL tipping starts in Phase 2."
-    : isSelfDonation
-      ? "You can't send a reaction to yourself."
-      : paymentState.status === "error"
-        ? paymentState.reason
-        : null;
-  const canSendReaction = false;
-  const sendButtonLabel =
-    walletsReady && solanaWalletReady
-      ? "SOL tipping starts in Phase 2"
-      : authenticated
-        ? "Waiting for Solana wallet"
-        : "Log in to send reaction";
 
-  const handleSendReaction = (e: React.FormEvent) => {
+  const isProcessing =
+    transactionState.status === "signing" ||
+    transactionState.status === "confirming";
+
+  const canSendReaction =
+    authenticated &&
+    solanaWalletReady &&
+    !isSelfDonation &&
+    Boolean(demoSolanaCreator.publicKey) &&
+    !isProcessing;
+
+  const sendButtonLabel = useMemo(() => {
+    if (!authenticated) return "Log in to send reaction";
+    if (!walletsReady || !solanaWallet) return "Preparing Solana wallet...";
+    if (isSelfDonation) return "Cannot tip yourself";
+    if (!demoSolanaCreator.publicKey) return "Creator not configured";
+    if (transactionState.status === "signing") return "Confirm in your wallet...";
+    if (transactionState.status === "confirming") return "Confirming on Devnet...";
+    return `Send ${selectedEmote.displayAmount} Reaction`;
+  }, [
+    authenticated,
+    walletsReady,
+    solanaWallet,
+    isSelfDonation,
+    transactionState.status,
+    selectedEmote.displayAmount,
+  ]);
+
+  const handleSendReaction = async (e: React.FormEvent) => {
     e.preventDefault();
-    setTransactionState({
-      status: "error",
-      reason: "SOL tipping starts in Phase 2.",
-    });
+    if (
+      !canSendReaction ||
+      !solanaWallet ||
+      !solanaPublicKey ||
+      !demoSolanaCreator.publicKey
+    ) {
+      return;
+    }
+
+    try {
+      setTransactionState({ status: "signing" });
+
+      const txBytes = await buildTipSolTransactionBytes({
+        donor: address(solanaPublicKey),
+        creator: demoSolanaCreator.publicKey,
+        amountLamports: selectedEmote.lamports,
+        emoteId: selectedEmote.onchainId,
+        message: message.trim() || undefined,
+      });
+
+      const res = await signAndSendTransaction({
+        transaction: txBytes,
+        wallet: solanaWallet,
+        chain: solanaDevnetChain,
+      });
+
+      const signature = formatSolanaSignature(res.signature);
+      setTransactionState({ status: "confirming", signature });
+
+      const confirmation = await confirmSolanaTransaction(signature);
+      if (!confirmation.confirmed) {
+        setTransactionState({
+          status: "error",
+          reason: confirmation.error || "Transaction confirmation failed",
+        });
+        return;
+      }
+
+      const explorerUrl = getSolanaExplorerUrl(signature, "devnet");
+      setTransactionState({
+        status: "success",
+        signature,
+        explorerUrl,
+      });
+
+      // Trigger preview alert animation on the stream preview
+      const alertId = Date.now();
+      setAlerts((prev) => [
+        ...prev,
+        {
+          id: alertId,
+          emote: selectedEmote,
+          message: message.trim() || selectedEmote.name,
+        },
+      ]);
+      setTimeout(() => {
+        setAlerts((prev) => prev.filter((a) => a.id !== alertId));
+      }, 4500);
+
+      setMessage("");
+    } catch (err: unknown) {
+      const errorMsg =
+        err instanceof Error
+          ? err.message
+          : "Transaction was rejected or failed.";
+      setTransactionState({
+        status: "error",
+        reason: errorMsg,
+      });
+    }
   };
+
 
   return (
     <main className="min-h-screen bg-slate-950 text-white font-sans selection:bg-purple-500 selection:text-white relative overflow-hidden">
@@ -259,16 +340,71 @@ export default function Home() {
                 disabled={!canSendReaction}
                 className={`w-full py-3.5 px-6 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 shadow-lg bg-gradient-to-r ${selectedEmote.color} hover:opacity-95 hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 disabled:hover:scale-100 disabled:cursor-not-allowed`}
               >
-                <Send className="w-4 h-4" />{" "}
+                {isProcessing ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Send className="w-4 h-4" />
+                )}{" "}
                 {sendButtonLabel}
               </button>
+
+              {/* Status Feedback Banners */}
               {!authenticated && (
                 <p className="text-xs text-slate-500 text-center">
                   Sign in with Google or email to create your Solana embedded wallet.
                 </p>
               )}
-              {authenticated && phaseMessage && (
-                <p className="text-xs text-amber-300 text-center">{phaseMessage}</p>
+
+              {authenticated && isSelfDonation && (
+                <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>You cannot tip your own wallet address.</span>
+                </div>
+              )}
+
+              {authenticated && creatorConfigurationWarning && (
+                <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{creatorConfigurationWarning}</span>
+                </div>
+              )}
+
+              {transactionState.status === "error" && (
+                <div className="flex items-start gap-2 p-3.5 rounded-xl bg-red-500/10 border border-red-500/20 text-xs text-red-300">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <div className="flex-1 break-all">
+                    <p className="font-semibold mb-0.5">Donation failed</p>
+                    <p className="text-red-300/80">{transactionState.reason}</p>
+                  </div>
+                </div>
+              )}
+
+              {transactionState.status === "success" && (
+                <div className="flex flex-col gap-2 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-200">
+                  <div className="flex items-center gap-2 font-semibold text-emerald-300">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span>Donation confirmed on Solana Devnet!</span>
+                  </div>
+                  <p className="text-slate-300">
+                    Sent <span className="font-bold text-white">{selectedEmote.displayAmount}</span> with gesture{" "}
+                    <span>{selectedEmote.emoji}</span>
+                  </p>
+                  {transactionState.signature && (
+                    <p className="text-[11px] text-slate-400 font-mono">
+                      Sig: {transactionState.signature.slice(0, 12)}...{transactionState.signature.slice(-12)}
+                    </p>
+                  )}
+                  {transactionState.explorerUrl && (
+                    <a
+                      href={transactionState.explorerUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 text-purple-400 hover:text-purple-300 font-semibold underline underline-offset-2 mt-1"
+                    >
+                      View on Solana Explorer <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
               )}
             </form>
           </div>
