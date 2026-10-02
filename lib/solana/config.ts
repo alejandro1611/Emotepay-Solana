@@ -18,6 +18,11 @@ export type SolanaCreatorConfig = {
   configurationStatus: SolanaPublicKeyConfigurationStatus;
 };
 
+export type EmotepayProgramConfig = {
+  publicKey: Address | null;
+  configurationStatus: SolanaPublicKeyConfigurationStatus;
+};
+
 export const solanaDevnetChain = "solana:devnet";
 
 export const solanaRpcUrl =
@@ -30,14 +35,6 @@ export const solanaWsUrl =
 
 export const solanaDevnetExplorerUrl =
   "https://explorer.solana.com/?cluster=devnet";
-
-export const defaultEmotepayProgramId =
-  "EQEjzX3Kd2JpMzqK9gF32gznDonmLtcuj7fMot4w22nL";
-
-export const emotepayProgramAddress: Address = address(
-  process.env.NEXT_PUBLIC_EMOTEPAY_PROGRAM_ID?.trim() ||
-    defaultEmotepayProgramId,
-);
 
 export const solanaRpc = createSolanaRpc(solanaRpcUrl);
 
@@ -74,6 +71,37 @@ export function validateSolanaPublicKey(
     configurationStatus: "ready",
   };
 }
+
+export function validateRequiredSolanaPublicKey(
+  configuredPublicKey?: string,
+): EmotepayProgramConfig {
+  const trimmedPublicKey = configuredPublicKey?.trim();
+
+  if (!trimmedPublicKey) {
+    return {
+      publicKey: null,
+      configurationStatus: "missing",
+    };
+  }
+
+  if (!isAddress(trimmedPublicKey)) {
+    return {
+      publicKey: null,
+      configurationStatus: "invalid",
+    };
+  }
+
+  return {
+    publicKey: address(trimmedPublicKey),
+    configurationStatus: "ready",
+  };
+}
+
+export const emotepayProgramConfig = validateRequiredSolanaPublicKey(
+  process.env.NEXT_PUBLIC_EMOTEPAY_PROGRAM_ID,
+);
+
+export const emotepayProgramAddress = emotepayProgramConfig.publicKey;
 
 export const demoSolanaCreator: SolanaCreatorConfig = {
   id: "demo-creator",

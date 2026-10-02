@@ -123,6 +123,11 @@ El código TypeScript debe compilar limpiamente con `npx tsc --noEmit` y pasar e
 - Indexación de historial con Envio o bases de datos externas.
 - Despliegue en Solana Mainnet.
 
+> TODO OBS/Solana: la animación de alerta agregada en la home es solamente una
+> previsualización local. La ruta `/overlay` todavía utiliza el flujo anterior
+> EVM/Envio y debe migrarse en una fase posterior para consumir eventos
+> Solana `TipEvent` reales, deduplicarlos y filtrar por creador.
+
 ---
 
 ## Expected Files / Components

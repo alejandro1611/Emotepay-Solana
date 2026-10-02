@@ -14,10 +14,7 @@ import {
   type Instruction,
 } from "@solana/kit";
 import { getAddMemoInstruction } from "@solana-program/memo";
-import {
-  emotepayProgramAddress,
-  solanaRpc,
-} from "@/lib/solana/config";
+import { solanaRpc } from "@/lib/solana/config";
 
 const SYSTEM_PROGRAM_ADDRESS = address(
   "11111111111111111111111111111111",
@@ -51,13 +48,13 @@ export function createTipSolInstruction({
   creator,
   amountLamports,
   emoteId,
-  programAddress = emotepayProgramAddress,
+  programAddress,
 }: {
   donor: Address;
   creator: Address;
   amountLamports: bigint;
   emoteId: number;
-  programAddress?: Address;
+  programAddress: Address;
 }): Instruction {
   return {
     programAddress,
@@ -76,7 +73,13 @@ export type BuildTipTransactionParams = {
   amountLamports: bigint;
   emoteId: number;
   message?: string;
-  programAddress?: Address;
+  programAddress: Address;
+};
+
+export type BuiltTipSolTransaction = {
+  transactionBytes: Uint8Array;
+  blockhash: string;
+  lastValidBlockHeight: bigint;
 };
 
 export async function buildTipSolTransactionBytes({
@@ -85,8 +88,8 @@ export async function buildTipSolTransactionBytes({
   amountLamports,
   emoteId,
   message,
-  programAddress = emotepayProgramAddress,
-}: BuildTipTransactionParams): Promise<Uint8Array> {
+  programAddress,
+}: BuildTipTransactionParams): Promise<BuiltTipSolTransaction> {
   const { value: latestBlockhash } = await solanaRpc
     .getLatestBlockhash({ commitment: "confirmed" })
     .send();
@@ -117,48 +120,100 @@ export async function buildTipSolTransactionBytes({
   );
 
   const compiledTransaction = compileTransaction(transactionMessage);
-  return new Uint8Array(getTransactionEncoder().encode(compiledTransaction));
+  return {
+    transactionBytes: new Uint8Array(
+      getTransactionEncoder().encode(compiledTransaction),
+    ),
+    blockhash: latestBlockhash.blockhash,
+    lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+  };
 }
 
-export function formatSolanaSignature(signatureInput: Uint8Array | string): string {
+export function formatSolanaSignature(
+  signatureInput: Uint8Array | string,
+): string {
   if (typeof signatureInput === "string") {
     return signatureInput;
   }
   return getBase58Decoder().decode(signatureInput);
 }
 
+export type SolanaTransactionConfirmation =
+  | { status: "confirmed" }
+  | { status: "failed"; error: string }
+  | { status: "expired"; error: string }
+  | { status: "unknown"; reason: string };
+
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function confirmSolanaTransaction(
   sigString: string,
-  maxAttempts = 30,
-  intervalMs = 1500,
-): Promise<{ confirmed: boolean; error?: string }> {
+  {
+    lastValidBlockHeight,
+    maxAttempts = 90,
+    intervalMs = 1500,
+  }: {
+    lastValidBlockHeight: bigint;
+    maxAttempts?: number;
+    intervalMs?: number;
+  },
+): Promise<SolanaTransactionConfirmation> {
+  let lastRpcError: string | null = null;
+
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const response = await solanaRpc
-        .getSignatureStatuses([signature(sigString)])
+        .getSignatureStatuses([signature(sigString)], {
+          searchTransactionHistory: true,
+        })
         .send();
 
       const status = response.value?.[0];
-      if (status) {
-        if (status.err) {
-          return {
-            confirmed: false,
-            error: `Transaction failed: ${JSON.stringify(status.err)}`,
-          };
-        }
-        if (
-          status.confirmationStatus === "confirmed" ||
-          status.confirmationStatus === "finalized"
-        ) {
-          return { confirmed: true };
-        }
+      if (status?.err) {
+        return {
+          status: "failed",
+          error: `Transaction failed on-chain: ${JSON.stringify(status.err)}`,
+        };
       }
-    } catch {
-      // Ignore transient RPC polling errors
+      if (
+        status?.confirmationStatus === "confirmed" ||
+        status?.confirmationStatus === "finalized"
+      ) {
+        return { status: "confirmed" };
+      }
+
+      lastRpcError = null;
+    } catch (err: unknown) {
+      lastRpcError =
+        err instanceof Error ? err.message : "RPC status check failed";
     }
 
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    try {
+      const currentBlockHeight = await solanaRpc
+        .getBlockHeight({ commitment: "confirmed" })
+        .send();
+
+      if (currentBlockHeight > lastValidBlockHeight) {
+        return {
+          status: "expired",
+          error:
+            "The transaction blockhash expired before confirmation. The transaction should not land; check the signature before retrying.",
+        };
+      }
+    } catch (err: unknown) {
+      lastRpcError =
+        err instanceof Error ? err.message : "RPC block-height check failed";
+    }
+
+    await sleep(intervalMs);
   }
 
-  return { confirmed: false, error: "Transaction confirmation timed out." };
+  return {
+    status: "unknown",
+    reason: lastRpcError
+      ? `Confirmation is still uncertain because the RPC did not return a final status: ${lastRpcError}`
+      : "Confirmation is still pending before the blockhash expiration window was observed.",
+  };
 }

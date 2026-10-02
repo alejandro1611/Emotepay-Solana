@@ -2,7 +2,16 @@
 
 import React, { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sparkles, Send, Tv, Zap, Loader2, ExternalLink, CheckCircle2, AlertCircle } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  ExternalLink,
+  Loader2,
+  Send,
+  Sparkles,
+  Tv,
+  Zap,
+} from "lucide-react";
 import { usePrivy } from "@privy-io/react-auth";
 import {
   useSignAndSendTransaction,
@@ -10,7 +19,12 @@ import {
 } from "@privy-io/react-auth/solana";
 import { address } from "@solana/kit";
 import { AuthButton } from "@/components/AuthButton";
-import { demoSolanaCreator, solanaDevnetChain } from "@/lib/solana/config";
+import {
+  demoSolanaCreator,
+  emotepayProgramAddress,
+  emotepayProgramConfig,
+  solanaDevnetChain,
+} from "@/lib/solana/config";
 import { EMOTES, type Emote } from "@/lib/emotes";
 import { getSolanaExplorerUrl, type PaymentState } from "@/lib/payment";
 import {
@@ -70,13 +84,27 @@ function getCreatorConfigurationWarning() {
   return null;
 }
 
+function getProgramConfigurationWarning() {
+  if (emotepayProgramConfig.configurationStatus === "missing") {
+    return "EmotePay Devnet program ID is not configured. Set NEXT_PUBLIC_EMOTEPAY_PROGRAM_ID to a deployed program address.";
+  }
+
+  if (emotepayProgramConfig.configurationStatus === "invalid") {
+    return "EmotePay Devnet program ID is invalid. Check NEXT_PUBLIC_EMOTEPAY_PROGRAM_ID.";
+  }
+
+  return null;
+}
+
 export default function Home() {
   const { ready, authenticated } = usePrivy();
   const { ready: walletsReady, wallets } = useSolanaWallets();
   const { signAndSendTransaction } = useSignAndSendTransaction();
   const [selectedEmote, setSelectedEmote] = useState<Emote>(EMOTES[0]);
   const [message, setMessage] = useState("");
-  const [alerts, setAlerts] = useState<Array<{ id: number; emote: Emote; message: string }>>([]);
+  const [alerts, setAlerts] = useState<
+    Array<{ id: number; emote: Emote; message: string }>
+  >([]);
   const [transactionState, setTransactionState] = useState<PaymentState>({
     status: "idle",
   });
@@ -95,25 +123,30 @@ export default function Home() {
   const solanaWalletReady =
     readinessState.status === "ready" && !isSelfDonation;
   const creatorConfigurationWarning = getCreatorConfigurationWarning();
+  const programConfigurationWarning = getProgramConfigurationWarning();
 
   const isProcessing =
     transactionState.status === "signing" ||
     transactionState.status === "confirming";
+  const transactionLocked = isProcessing || transactionState.status === "pending";
 
   const canSendReaction =
     authenticated &&
     solanaWalletReady &&
     !isSelfDonation &&
     Boolean(demoSolanaCreator.publicKey) &&
-    !isProcessing;
+    Boolean(emotepayProgramAddress) &&
+    !transactionLocked;
 
   const sendButtonLabel = useMemo(() => {
     if (!authenticated) return "Log in to send reaction";
     if (!walletsReady || !solanaWallet) return "Preparing Solana wallet...";
     if (isSelfDonation) return "Cannot tip yourself";
     if (!demoSolanaCreator.publicKey) return "Creator not configured";
+    if (!emotepayProgramAddress) return "Program not configured";
     if (transactionState.status === "signing") return "Confirm in your wallet...";
     if (transactionState.status === "confirming") return "Confirming on Devnet...";
+    if (transactionState.status === "pending") return "Check transaction status";
     return `Send ${selectedEmote.displayAmount} Reaction`;
   }, [
     authenticated,
@@ -130,7 +163,8 @@ export default function Home() {
       !canSendReaction ||
       !solanaWallet ||
       !solanaPublicKey ||
-      !demoSolanaCreator.publicKey
+      !demoSolanaCreator.publicKey ||
+      !emotepayProgramAddress
     ) {
       return;
     }
@@ -138,40 +172,56 @@ export default function Home() {
     try {
       setTransactionState({ status: "signing" });
 
-      const txBytes = await buildTipSolTransactionBytes({
+      const builtTransaction = await buildTipSolTransactionBytes({
         donor: address(solanaPublicKey),
         creator: demoSolanaCreator.publicKey,
+        programAddress: emotepayProgramAddress,
         amountLamports: selectedEmote.lamports,
         emoteId: selectedEmote.onchainId,
         message: message.trim() || undefined,
       });
 
       const res = await signAndSendTransaction({
-        transaction: txBytes,
+        transaction: builtTransaction.transactionBytes,
         wallet: solanaWallet,
         chain: solanaDevnetChain,
       });
 
       const signature = formatSolanaSignature(res.signature);
+      const explorerUrl = getSolanaExplorerUrl(signature, "devnet");
       setTransactionState({ status: "confirming", signature });
 
-      const confirmation = await confirmSolanaTransaction(signature);
-      if (!confirmation.confirmed) {
+      const confirmation = await confirmSolanaTransaction(signature, {
+        lastValidBlockHeight: builtTransaction.lastValidBlockHeight,
+      });
+      if (confirmation.status === "failed" || confirmation.status === "expired") {
         setTransactionState({
           status: "error",
-          reason: confirmation.error || "Transaction confirmation failed",
+          reason: confirmation.error,
+          signature,
+          explorerUrl,
         });
         return;
       }
 
-      const explorerUrl = getSolanaExplorerUrl(signature, "devnet");
+      if (confirmation.status === "unknown") {
+        setTransactionState({
+          status: "pending",
+          signature,
+          explorerUrl,
+          reason: confirmation.reason,
+        });
+        return;
+      }
+
       setTransactionState({
         status: "success",
         signature,
         explorerUrl,
       });
 
-      // Trigger preview alert animation on the stream preview
+      // Local preview only. TODO: /overlay still uses the old EVM/Envio flow
+      // and must be migrated to consume Solana TipEvent before real OBS alerts.
       const alertId = Date.now();
       setAlerts((prev) => [
         ...prev,
@@ -233,10 +283,10 @@ export default function Home() {
         <div className="lg:col-span-7 flex flex-col gap-4">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-2">
-              <Tv className="w-4 h-4 text-purple-400" /> Stream Overlay Preview
+              <Tv className="w-4 h-4 text-purple-400" /> Local Stream Preview
             </h2>
             <span className="text-xs bg-purple-500/10 text-purple-400 px-2.5 py-1 rounded-full border border-purple-500/20">
-              OBS Live Feed
+              Preview only
             </span>
           </div>
 
@@ -248,7 +298,7 @@ export default function Home() {
               <p className="text-sm">Live Stream Gameplay Preview</p>
             </div>
 
-            {/* OVERLAY ALERT ANIMATION (Lo que se ve en la pantalla del streamer) */}
+            {/* Local preview animation; this is not wired to the real /overlay OBS page yet. */}
             <AnimatePresence>
               {alerts.map((alert) => (
                 <motion.div
@@ -369,12 +419,61 @@ export default function Home() {
                 </div>
               )}
 
+              {authenticated && programConfigurationWarning && (
+                <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{programConfigurationWarning}</span>
+                </div>
+              )}
+
+              {transactionState.status === "pending" && (
+                <div className="flex flex-col gap-2 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">
+                  <div className="flex items-center gap-2 font-semibold text-amber-300">
+                    <AlertCircle className="w-4 h-4 text-amber-400" />
+                    <span>Transaction status unknown</span>
+                  </div>
+                  <p className="text-slate-300">
+                    {transactionState.reason} Do not send another tip until you
+                    check this signature.
+                  </p>
+                  <p className="text-[11px] text-slate-400 font-mono break-all">
+                    Sig: {transactionState.signature}
+                  </p>
+                  {transactionState.explorerUrl && (
+                    <a
+                      href={transactionState.explorerUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 text-purple-400 hover:text-purple-300 font-semibold underline underline-offset-2 mt-1"
+                    >
+                      Check on Solana Explorer <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+              )}
+
               {transactionState.status === "error" && (
                 <div className="flex items-start gap-2 p-3.5 rounded-xl bg-red-500/10 border border-red-500/20 text-xs text-red-300">
                   <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                   <div className="flex-1 break-all">
                     <p className="font-semibold mb-0.5">Donation failed</p>
                     <p className="text-red-300/80">{transactionState.reason}</p>
+                    {transactionState.signature && (
+                      <p className="text-[11px] text-slate-400 font-mono mt-2">
+                        Sig: {transactionState.signature.slice(0, 12)}...
+                        {transactionState.signature.slice(-12)}
+                      </p>
+                    )}
+                    {transactionState.explorerUrl && (
+                      <a
+                        href={transactionState.explorerUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 text-purple-400 hover:text-purple-300 font-semibold underline underline-offset-2 mt-2"
+                      >
+                        View on Solana Explorer <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
                   </div>
                 </div>
               )}

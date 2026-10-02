@@ -6,9 +6,19 @@ export type PaymentState =
   | { status: "ready" }
   | { status: "signing" }
   | { status: "confirming"; signature: string }
-  | { status: "pending"; signature?: string }
-  | { status: "success"; signature: string; explorerUrl?: string; reference?: string }
-  | { status: "error"; reason: string };
+  | {
+      status: "pending";
+      signature: string;
+      explorerUrl?: string;
+      reason: string;
+    }
+  | {
+      status: "success";
+      signature: string;
+      explorerUrl?: string;
+      reference?: string;
+    }
+  | { status: "error"; reason: string; signature?: string; explorerUrl?: string };
 
 export function getSolanaExplorerUrl(
   signature: string,
@@ -16,7 +26,6 @@ export function getSolanaExplorerUrl(
 ): string {
   return `https://explorer.solana.com/tx/${signature}?cluster=${cluster}`;
 }
-
 
 type PaymentReadinessInput = {
   authReady: boolean;
